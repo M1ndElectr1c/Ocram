@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.venv/
+venv/
+
+# User workspace & copyrighted Terraria assets
+workspace/
+vanilla/
+mod_vfs/
+unpacked_png/
+custom_sheets/
+custom_sounds/
+custom_music/
+custom_strings/
+*.vfs
+*.gxt
+*.vag
+*.at9
+*.wav
+*.str
+*.fnt
+*.wld
+
+# Local configs & external CLI binaries
+ocram_config.json
+vgmstream-cli
+vgmstream-cli.exe
+at9tool
+at9tool.exe
+tools/
