@@ -177,6 +177,59 @@ def _encode_single_channel_vag(pcm: np.ndarray) -> bytearray:
     vag_body.extend(b"\x00\x07" + b"\x00" * 14)
     return vag_body
 
+
+def extract_xnb_sound_to_wav(xnb_path: str, out_wav_path: str) -> bool:
+    """Извлекает аудиопоток PCM из XNA SoundEffect .xnb файла в стандартный .wav."""
+    with open(xnb_path, "rb") as f:
+        data = f.read()
+
+    if len(data) < 40 or data[:3] != b"XNB":
+        return False
+
+    # Находим стандартный 18-байтный заголовок WAVEFORMATEX (tag = 1 для PCM, 1 или 2 канала)
+    fmt_offset = -1
+    for i in range(14, min(len(data) - 24, 256)):
+        w_format_tag, n_channels, n_samples_per_sec, n_avg_bytes, n_block_align, w_bits, cb_size = struct.unpack_from("<HHIIHHH", data, i)
+        if w_format_tag == 1 and n_channels in (1, 2) and 8000 <= n_samples_per_sec <= 96000 and w_bits in (8, 16):
+            if n_block_align == n_channels * (w_bits // 8) and n_avg_bytes == n_samples_per_sec * n_block_align:
+                fmt_offset = i
+                break
+
+    if fmt_offset < 0:
+        return False
+
+    _, n_channels, sample_rate, _, _, w_bits, cb_size = struct.unpack_from("<HHIIHHH", data, fmt_offset)
+    data_len_pos = fmt_offset + 18 + cb_size
+    if data_len_pos + 4 > len(data):
+        return False
+
+    pcm_size, = struct.unpack_from("<I", data, data_len_pos)
+    pcm_data = data[data_len_pos + 4 : data_len_pos + 4 + pcm_size]
+    if not pcm_data:
+        return False
+
+    os.makedirs(os.path.dirname(os.path.abspath(out_wav_path)), exist_ok=True)
+    with wave.open(out_wav_path, "wb") as wf:
+        wf.setnchannels(n_channels)
+        wf.setsampwidth(w_bits // 8)
+        wf.setframerate(sample_rate)
+        wf.writeframes(pcm_data)
+    return True
+
+def convert_any_sound_to_vag(src_sound_path: str, out_vag_path: str, target_rate: int, target_channels: int, temp_dir: str) -> bool:
+    """Конвертирует .wav или .xnb звук в PS Vita .vag."""
+    ext = os.path.splitext(src_sound_path).__getitem__(1).lower()
+    if ext == ".wav":
+        encode_wav_to_vag(src_sound_path, out_vag_path, target_rate=target_rate, target_channels=target_channels)
+        return True
+    elif ext == ".xnb":
+        tmp_wav = os.path.join(temp_dir, "_tmp_xnb_sound.wav")
+        if extract_xnb_sound_to_wav(src_sound_path, tmp_wav):
+            encode_wav_to_vag(tmp_wav, out_vag_path, target_rate=target_rate, target_channels=target_channels)
+            return True
+    return False
+
+
 def encode_wav_to_vag(wav_path: str, vag_path: str, target_rate: int = 0, target_channels: int = 2) -> None:
     """Кодирует WAV в PS Vita HEVAG (.vag) с 16-байтным интерливингом."""
     with wave.open(wav_path, "rb") as wf:

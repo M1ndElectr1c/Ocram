@@ -185,7 +185,10 @@ class OcramApp:
 
         ttk.Label(f_step3, text="Output File:").grid(row=0, column=0, sticky="w", padx=6, pady=6)
         ttk.Entry(f_step3, textvariable=self.vars["out_vfs"], width=40).grid(row=0, column=1, sticky="w", padx=4)
-        ttk.Button(f_step3, text="Build VFS", command=self.start_build_mod).grid(row=0, column=2, padx=10, ipady=4, ipadx=12)
+        self.var_auto_sounds = tk.BooleanVar(value=True)
+        ttk.Checkbutton(f_step3, text="Auto-convert Pack Sounds (.wav / .xnb)", variable=self.var_auto_sounds).grid(row=0, column=2, padx=8)
+        ttk.Button(f_step3, text="Build VFS", command=self.start_build_mod).grid(row=0, column=3, padx=10, ipady=4, ipadx=12)
+
 
         self.prog_main = ttk.Progressbar(self.tab_build, mode="determinate")
         self.prog_main.pack(fill="x", padx=12, pady=4)
@@ -518,6 +521,23 @@ class OcramApp:
             return
         threading.Thread(target=self.worker_build, daemon=True).start()
 
+    def collect_pack_sounds_map(self) -> dict[str, str]:
+        """Рекурсивно собирает все .wav и .xnb из папки Sounds текстурпака (включая Sounds/Custom)."""
+        pc_snd_dir = self.resolve_sounds_dir(self.cfg["pc_pack_dir"])
+        found = {}
+        if not pc_snd_dir or not os.path.exists(pc_snd_dir):
+            return found
+        for root, _, files in os.walk(pc_snd_dir):
+            for f in sorted(files):
+                low = f.lower()
+                if low.endswith((".wav", ".xnb")):
+                    stem = os.path.splitext(low).__getitem__(0)
+                    if stem not in found or low.endswith(".wav"):
+                        found[stem] = os.path.join(root, f)
+        return found
+
+
+
     def worker_build(self):
         try:
             ws = self.cfg["workspace_dir"]
@@ -532,6 +552,25 @@ class OcramApp:
 
             self.log("=== Applying PC Texture Pack to PS Vita Atlases ===")
             gxt_engine.apply_texture_pack(tp_imgs, vanilla_dir, unpacked_dir, mod_dir, self.atlas_map, self.log, self.set_prog)
+
+            if self.var_auto_sounds.get():
+                pack_sounds = self.collect_pack_sounds_map()
+                if pack_sounds:
+                    self.log(f"=== Converting matching PC sounds ({len(pack_sounds)} files in pack) ===")
+                    snd_dir = os.path.join(vanilla_dir, "sounds")
+                    converted_cnt = 0
+                    for vag_name in sorted(os.listdir(snd_dir)):
+                        if not vag_name.lower().endswith(".vag"):
+                            continue
+                        stem = os.path.splitext(vag_name).__getitem__(0).lower()
+                        if stem in pack_sounds:
+                            orig_vag = os.path.join(snd_dir, vag_name)
+                            orig_rate, orig_ch = audio_vag.decode_vag_to_wav(orig_vag, os.path.join(ws, "tmp_rate.wav"))
+                            out_vag = os.path.join(mod_dir, "sounds", vag_name)
+                            if audio_vag.convert_any_sound_to_vag(pack_sounds[stem], out_vag, orig_rate, orig_ch, ws):
+                                converted_cnt += 1
+                    self.log(f"[OK] Auto-converted {converted_cnt} sound effects from texture pack")
+
 
             custom_snd = os.path.join(ws, "custom_sounds")
             if os.path.exists(custom_snd):
@@ -968,22 +1007,6 @@ class OcramApp:
             return None
         return self.audio_files.__getitem__(sel.__getitem__(0))
 
-
-    def play_mod_sound(self):
-        vag_name = self.get_selected_vag()
-        if not vag_name:
-            return
-        pc_snd_dir = self.resolve_sounds_dir(self.cfg["pc_pack_dir"])
-        if not pc_snd_dir:
-            messagebox.showinfo("No Sounds", "No Sounds folder found in PC Texture Pack.")
-            return
-        base_low = os.path.splitext(vag_name).__getitem__(0).lower() + ".wav"
-        for f in os.listdir(pc_snd_dir):
-            if f.lower() == base_low:
-                audio_vag.play_wav_async(os.path.join(pc_snd_dir, f), volume=self.var_volume.get())
-                return
-        messagebox.showinfo("Not Found", f"No matching {base_low} in PC Texture Pack.")
-
     def replace_custom_wav(self):
         vag_name = self.get_selected_vag()
         if not vag_name:
@@ -1000,24 +1023,23 @@ class OcramApp:
         messagebox.showinfo("Replaced", f"Encoded {os.path.basename(wav_p)} -> {vag_name} ({orig_rate} Hz)")
 
     def batch_replace_audio(self):
-        pc_snd_dir = self.resolve_sounds_dir(self.cfg["pc_pack_dir"])
-        if not pc_snd_dir:
-            messagebox.showwarning("No Sounds", "No Sounds folder found in PC Texture Pack.")
+        pack_sounds = self.collect_pack_sounds_map()
+        if not pack_sounds:
+            messagebox.showwarning("No Sounds", "No .wav or .xnb files found in PC Texture Pack Sounds folder.")
             return
         ws = self.cfg["workspace_dir"]
         snd_dir = os.path.join(ws, "vanilla", "sounds")
-        pc_wavs_lower = {f.lower(): f for f in os.listdir(pc_snd_dir) if f.lower().endswith(".wav")}
         replaced = 0
-        for vag_name in os.listdir(snd_dir):
+        for vag_name in sorted(os.listdir(snd_dir)):
             if not vag_name.lower().endswith(".vag"):
                 continue
-            wav_key = os.path.splitext(vag_name).__getitem__(0).lower() + ".wav"
-            if wav_key in pc_wavs_lower:
+            stem = os.path.splitext(vag_name).__getitem__(0).lower()
+            if stem in pack_sounds:
                 orig_vag = os.path.join(snd_dir, vag_name)
                 orig_rate, orig_ch = audio_vag.decode_vag_to_wav(orig_vag, os.path.join(ws, "tmp_rate.wav"))
                 out_vag = os.path.join(ws, "custom_sounds", vag_name)
-                audio_vag.encode_wav_to_vag(os.path.join(pc_snd_dir, pc_wavs_lower[wav_key]), out_vag, target_rate=orig_rate, target_channels=orig_ch)
-                replaced += 1
+                if audio_vag.convert_any_sound_to_vag(pack_sounds[stem], out_vag, orig_rate, orig_ch, ws):
+                    replaced += 1
         self.refresh_audio_list()
         messagebox.showinfo("Batch Audio", f"Converted and replaced {replaced} sound effects!")
 
@@ -1027,9 +1049,7 @@ class OcramApp:
         ws = self.cfg["workspace_dir"]
         self.lb_audio.delete(0, "end")
         self.audio_files = []
-
-        pc_snd_dir = self.resolve_sounds_dir(self.cfg["pc_pack_dir"])
-        pc_wavs_lower = {f.lower(): f for f in os.listdir(pc_snd_dir)} if pc_snd_dir else {}
+        pack_sounds = self.collect_pack_sounds_map()
 
         for sub_folder, ext, custom_sub in (("sounds", ".vag", "custom_sounds"), ("music", ".at9", "custom_music")):
             folder_p = os.path.join(ws, "vanilla", sub_folder)
@@ -1041,12 +1061,32 @@ class OcramApp:
                 rel_item = f"{sub_folder}/{f}"
                 if q and q not in rel_item.lower():
                     continue
-                base_no_ext = os.path.splitext(f)[0].lower()
+                base_no_ext = os.path.splitext(f).__getitem__(0).lower()
                 has_custom = os.path.exists(os.path.join(ws, custom_sub, f))
-                has_pc = f"{base_no_ext}.wav" in pc_wavs_lower
-                tag = "[CUSTOM] " if has_custom else ("[PACK WAV] " if has_pc else f"[{sub_folder.upper()}] ")
+                has_pc = (sub_folder == "sounds" and base_no_ext in pack_sounds)
+                tag = "[CUSTOM] " if has_custom else ("[PACK AUDIO] " if has_pc else f"[{sub_folder.upper()}] ")
                 self.audio_files.append(rel_item)
                 self.lb_audio.insert("end", tag + rel_item)
+
+    def play_mod_sound(self):
+        rel_name = self.get_selected_vag()
+        if not rel_name or not rel_name.startswith("sounds/"):
+            return
+        vag_name = rel_name.split("/", 1).__getitem__(1)
+
+        stem = os.path.splitext(vag_name).__getitem__(0).lower()
+        pack_sounds = self.collect_pack_sounds_map()
+        if stem not in pack_sounds:
+            messagebox.showinfo("Not Found", f"No matching {stem}.wav or {stem}.xnb in PC Texture Pack.")
+            return
+        src_p = pack_sounds[stem]
+        if src_p.lower().endswith(".xnb"):
+            tmp_wav = os.path.join(self.cfg["workspace_dir"], "_tmp_xnb_play.wav")
+            audio_vag.extract_xnb_sound_to_wav(src_p, tmp_wav)
+            audio_vag.play_wav_async(tmp_wav, volume=self.var_volume.get())
+        else:
+            audio_vag.play_wav_async(src_p, volume=self.var_volume.get())
+
 
     def play_vita_sound(self):
         rel_name = self.get_selected_vag()
