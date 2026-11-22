@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/banner.png" alt="OCRAM — Old-gen Console Resource & Asset Manager" width="720">
+  <img src="assets/Banner.png" alt="OCRAM — Old-gen Console Resource & Asset Manager" width="720">
 </p>
 
 # OCRAM — Old-gen Console Resource & Asset Manager
