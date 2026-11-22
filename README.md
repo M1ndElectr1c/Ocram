@@ -84,5 +84,5 @@ pip install -r requirements.txt
 ## Legal Disclaimer
 This repository contains **zero copyrighted assets** from Terraria, Re-Logic, 505 Games, or Engine Software. External CLI tools (`vgmstream-cli`, `at9tool.exe`) are downloaded on demand by the user from their respective upstream releases and are excluded from this repository.
 
-##Contact me
+## Contact me
 Telegram - @memoryburner
