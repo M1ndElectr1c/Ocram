@@ -43,7 +43,8 @@ DEFAULT_CFG = {
     "pc_pack_dir": "",
     "out_vfs": "data.vfs",
     "ref_primary": "",
-    "ref_secondary": ""
+    "ref_secondary": "",
+    "remind_audio_tools": True
 }
 
 def scale_pixel_art(pil_img, max_side=130):
@@ -139,6 +140,8 @@ class OcramApp:
 
         self.notebook = ttk.Notebook(self.root)
         self.notebook.pack(fill="both", expand=True, padx=6, pady=6)
+        self.notebook.bind("<<NotebookTabChanged>>", self.on_tab_changed)
+        
 
         self.tab_build = ttk.Frame(self.notebook)
         self.tab_editor = ttk.Frame(self.notebook)
@@ -237,18 +240,24 @@ class OcramApp:
             "• Additionally, some sprites on PS Vita are rotated 90 degrees or have fewer animation frames than modern PC versions.\n"
             "• OCRAM bridges this gap using vita_atlas_map.json to automatically crop, rotate, downscale, quantize colors, and pack PC assets into PS Vita formats.\n\n"
             "2. Quick Port Workflow (3 Steps)\n"
-            "• Step 1: Dump your legal data.vfs from PS Vita via VitaShell (ux0:app/<TITLE_ID>/data.vfs), select it in 'Quick Port', and click 'Extract Base'.\n"
-            "• Step 2: Select any PC Texture Pack folder (root folder or Content/Images). All sprite and sound lists will update automatically.\n"
-            "• Step 3: Click 'Build VFS' to generate your modded data.vfs, then place it into ux0:rePatch/<TITLE_ID>/data.vfs on your console (or Vita3K).\n\n"
+            "• Step 1: Dump your decrypted data.vfs from PS Vita via VitaShell (Open decrypted -> ux0:patch/<TITLE_ID>/data.vfs), select it in 'Quick Port', and click 'Extract Base'.\n"
+            "• Step 2: Select any PC Texture Pack folder (root folder or Content/Images). Matching sprites and sounds (.wav / .xnb) will be detected automatically.\n"
+            "• Step 3: Enable 'Auto-convert Pack Sounds' if desired and click 'Build VFS' to generate your modded data.vfs, then place it into ux0:rePatch/<TITLE_ID>/data.vfs (or Vita3K).\n\n"
             "3. Using the Visual Sprite Editor\n"
-            "• Click any green box on the atlas to inspect which PC file is mapped to it, or click an unmapped sprite to auto-detect its contour.\n"
-            "• Hold Ctrl + Mouse Wheel over the atlas to zoom in/out.\n"
-            "• Enable 'Overlay Preview' to see how your modded sprites look directly on the PS Vita sheet before building.\n"
-            "• If a modern sprite has extra animation frames, adjust 'Frame Y Offset' to pick the exact frame you want displayed.\n"
-            "• Click 'Save Map' after making manual adjustments so they persist in vita_atlas_map.json.\n\n"
-            "4. Audio Replacer (.VAG)\n"
-            "• PS Vita uses Sony PS-ADPCM (.vag) audio files. Use 'Audio Replacer' to preview original .vag sounds, test PC .wav files, and batch-convert matching sound effects."
+            "• Switch between any unpacked GXT sheet or UI texture using the top Atlas dropdown.\n"
+            "• Click any green box to inspect its mapped PC sprite, or click an unmapped sprite to auto-detect its contour.\n"
+            "• Hold Ctrl + Mouse Wheel to zoom (0.25x–6.0x); use Mouse Wheel / Shift + Wheel to scroll.\n"
+            "• Enable 'Overlay Preview' to preview modded sprites directly on the PS Vita sheet before building.\n"
+            "• Use 'Replace Full Sheet...' on standalone sheets (logos, UI elements, single backgrounds) to replace them directly.\n\n"
+            "4. Audio & Music Manager (.VAG / .AT9)\n"
+            "• Sound effects (.vag) are encoded natively in Python from .wav or .xnb files.\n"
+            "• When opening 'Audio & Music' for the first time, click 'Download Automatically' to install vgmstream-cli (for audio preview) and at9tool.exe (for .wav -> .at9 music encoding).\n"
+            "• On Linux/macOS, OCRAM automatically runs at9tool.exe via 'mono' or falls back to 'wine'.\n"
+            "• Select any sound or music track and click 'Replace Audio...' — OCRAM automatically converts and renames your file to match the target slot.\n\n"
+            "5. Binary Text & Localization Editor (.STR)\n"
+            "• Open 'Text Editor (.STR)' to search, edit, or export/import localization files (strings_*.str) to JSON with automatic offset recalculation."
         )
+
         txt.insert("1.0", guide_content)
         txt.configure(state="disabled")
 
@@ -386,7 +395,6 @@ class OcramApp:
         self.lb_audio.configure(yscrollcommand=ascroll.set)
         self.lb_audio.pack(side="left", fill="both", expand=True)
         ascroll.pack(side="right", fill="y")
-
         ctrl = ttk.LabelFrame(self.tab_audio, text="Audio Controls")
         ctrl.pack(fill="x", padx=10, pady=8)
 
@@ -396,10 +404,21 @@ class OcramApp:
 
         ttk.Label(ctrl, text="Volume:").pack(side="left", padx=(14, 4))
         self.var_volume = tk.DoubleVar(value=0.35)
-        ttk.Scale(ctrl, from_=0.0, to=1.0, variable=self.var_volume, orient="horizontal", length=110).pack(side="left", padx=4)
+        ttk.Scale(ctrl, from_=0.0, to=1.0, variable=self.var_volume, orient="horizontal", length=100).pack(side="left", padx=4)
 
-        ttk.Button(ctrl, text="Replace WAV...", command=self.replace_custom_wav).pack(side="right", padx=6, pady=6, ipady=3, ipadx=8)
+        ttk.Label(ctrl, text="AT9 Bitrate:").pack(side="left", padx=(14, 4))
+        self.cb_at9_br = ttk.Combobox(
+            ctrl,
+            values=["96 kbps", "128 kbps", "144 kbps (Recommended)", "168 kbps", "192 kbps"],
+            state="readonly",
+            width=23
+        )
+        self.cb_at9_br.set("144 kbps (Recommended)")
+        self.cb_at9_br.pack(side="left", padx=4)
+
+        ttk.Button(ctrl, text="Replace Audio...", command=self.replace_custom_wav).pack(side="right", padx=6, pady=6, ipady=3, ipadx=8)
         ttk.Button(ctrl, text="Replace All", command=self.batch_replace_audio).pack(side="right", padx=6, pady=6, ipady=3, ipadx=8)
+
 
     # ================= TAB 4: TEXT EDITOR (.STR) =================
     def build_tab_text(self):
@@ -565,24 +584,18 @@ class OcramApp:
                         stem = os.path.splitext(vag_name).__getitem__(0).lower()
                         if stem in pack_sounds:
                             orig_vag = os.path.join(snd_dir, vag_name)
-                            orig_rate, orig_ch = audio_vag.decode_vag_to_wav(orig_vag, os.path.join(ws, "tmp_rate.wav"))
+                            orig_rate, orig_ch = audio_vag.get_vag_header_info(orig_vag)
                             out_vag = os.path.join(mod_dir, "sounds", vag_name)
                             if audio_vag.convert_any_sound_to_vag(pack_sounds[stem], out_vag, orig_rate, orig_ch, ws):
                                 converted_cnt += 1
                     self.log(f"[OK] Auto-converted {converted_cnt} sound effects from texture pack")
 
-
             custom_snd = os.path.join(ws, "custom_sounds")
             if os.path.exists(custom_snd):
                 for f in os.listdir(custom_snd):
                     if f.endswith(".vag"):
                         shutil.copy2(os.path.join(custom_snd, f), os.path.join(mod_dir, "sounds", f))
 
-            custom_snd = os.path.join(ws, "custom_sounds")
-            if os.path.exists(custom_snd):
-                for f in os.listdir(custom_snd):
-                    if f.endswith(".vag"):
-                        shutil.copy2(os.path.join(custom_snd, f), os.path.join(mod_dir, "sounds", f))
 
             custom_mus = os.path.join(ws, "custom_music")
             if os.path.exists(custom_mus):
@@ -998,52 +1011,90 @@ class OcramApp:
             json.dump(self.atlas_map, f, indent=2)
         messagebox.showinfo("Saved", "vita_atlas_map.json updated!")
 
-    # ================= AUDIO REPLACER METHODS =================
+    def on_tab_changed(self, event=None):
+        if self.notebook.select() == str(self.tab_audio):
+            self.check_and_prompt_audio_tools()
+
+    def check_and_prompt_audio_tools(self):
+        if not self.cfg.get("remind_audio_tools", True):
+            return
+        has_dec, has_enc = audio_vag.check_audio_tools_status()
+        if has_dec and has_enc:
+            return
+
+        lines = [
+            "Optional external audio tools are missing from the OCRAM folder or 'tools/' directory:\n"
+        ]
+        if not has_dec:
+            lines.append("• vgmstream-cli — required to play/preview PS Vita .vag & .at9 audio.\n  Manual link: https://vgmstream.org")
+        if not has_enc:
+            lines.append(
+                "• at9tool.exe (from ATRACTool) — required to encode .wav into PS Vita .at9 music.\n"
+                "  (Note: on Linux/macOS, OCRAM runs at9tool.exe via 'mono', or falls back to 'wine' if mono fails.)"
+            )
+
+        dlg = tk.Toplevel(self.root)
+        dlg.title("External Audio Tools Notice")
+        dlg.resizable(False, False)
+        dlg.transient(self.root)
+        dlg.wait_visibility()
+        dlg.grab_set()
+
+        lbl_info = ttk.Label(dlg, text="\n\n".join(lines), wraplength=510, justify="left")
+        lbl_info.pack(padx=18, pady=(16, 10), anchor="w")
+
+        lbl_status = ttk.Label(dlg, text="", foreground="#0066cc", font=("Segoe UI", 9, "bold"))
+        lbl_status.pack(padx=18, pady=(0, 6), anchor="w")
+
+        var_rem = tk.BooleanVar(value=True)
+        ttk.Checkbutton(dlg, text="Remind me every time", variable=var_rem).pack(padx=18, pady=4, anchor="w")
+
+        btn_row = ttk.Frame(dlg)
+        btn_row.pack(fill="x", padx=18, pady=(8, 16))
+
+        def on_close():
+            self.cfg["remind_audio_tools"] = bool(var_rem.get())
+            with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+                json.dump(self.cfg, f, indent=2, ensure_ascii=False)
+            dlg.destroy()
+
+        def on_download():
+            btn_dl.configure(state="disabled")
+            lbl_status.configure(text="Downloading missing tools, please wait...")
+
+            def worker():
+                try:
+                    res = audio_vag.download_missing_audio_tools(lambda m: self.root.after(0, lambda msg=m: lbl_status.configure(text=msg)))
+                    def done():
+                        if res:
+                            messagebox.showinfo("Download Complete", "Successfully installed into 'tools/':\n• " + "\n• ".join(res), parent=dlg)
+                            on_close()
+                        else:
+                            lbl_status.configure(text="Could not download automatically. Please install manually.")
+                            btn_dl.configure(state="normal")
+                    self.root.after(0, done)
+                except Exception as exc:
+                    err_msg = str(exc)
+                    self.root.after(0, lambda m=err_msg: (
+                        lbl_status.configure(text=f"Download error: {m}"),
+                        btn_dl.configure(state="normal")
+                    ))
+
+            threading.Thread(target=worker, daemon=True).start()
+
+        btn_dl = ttk.Button(btn_row, text="Download Automatically", command=on_download)
+        btn_dl.pack(side="left")
+
+        ttk.Button(btn_row, text="Close", command=on_close, width=12).pack(side="right")
 
 
-    def get_selected_vag(self):
+    # ================= AUDIO & MUSIC METHODS =================
+    def get_selected_audio_rel(self):
         sel = self.lb_audio.curselection()
         if not sel:
             return None
-        return self.audio_files.__getitem__(sel.__getitem__(0))
+        return self.audio_files[sel[0]]
 
-    def replace_custom_wav(self):
-        vag_name = self.get_selected_vag()
-        if not vag_name:
-            return
-        wav_p = filedialog.askopenfilename(filetypes=[("WAV Audio", "*.wav")])
-        if not wav_p:
-            return
-        ws = self.cfg["workspace_dir"]
-        orig_vag = os.path.join(ws, "vanilla", "sounds", vag_name)
-        orig_rate, orig_ch = audio_vag.decode_vag_to_wav(orig_vag, os.path.join(ws, "tmp_rate.wav"))
-        out_vag = os.path.join(ws, "custom_sounds", vag_name)
-        audio_vag.encode_wav_to_vag(wav_p, out_vag, target_rate=orig_rate, target_channels=orig_ch)
-        self.refresh_audio_list()
-        messagebox.showinfo("Replaced", f"Encoded {os.path.basename(wav_p)} -> {vag_name} ({orig_rate} Hz)")
-
-    def batch_replace_audio(self):
-        pack_sounds = self.collect_pack_sounds_map()
-        if not pack_sounds:
-            messagebox.showwarning("No Sounds", "No .wav or .xnb files found in PC Texture Pack Sounds folder.")
-            return
-        ws = self.cfg["workspace_dir"]
-        snd_dir = os.path.join(ws, "vanilla", "sounds")
-        replaced = 0
-        for vag_name in sorted(os.listdir(snd_dir)):
-            if not vag_name.lower().endswith(".vag"):
-                continue
-            stem = os.path.splitext(vag_name).__getitem__(0).lower()
-            if stem in pack_sounds:
-                orig_vag = os.path.join(snd_dir, vag_name)
-                orig_rate, orig_ch = audio_vag.decode_vag_to_wav(orig_vag, os.path.join(ws, "tmp_rate.wav"))
-                out_vag = os.path.join(ws, "custom_sounds", vag_name)
-                if audio_vag.convert_any_sound_to_vag(pack_sounds[stem], out_vag, orig_rate, orig_ch, ws):
-                    replaced += 1
-        self.refresh_audio_list()
-        messagebox.showinfo("Batch Audio", f"Converted and replaced {replaced} sound effects!")
-
-    # ================= AUDIO & MUSIC METHODS =================
     def refresh_audio_list(self):
         q = self.var_audio_q.get().strip().lower()
         ws = self.cfg["workspace_dir"]
@@ -1059,22 +1110,39 @@ class OcramApp:
                 if not f.lower().endswith(ext):
                     continue
                 rel_item = f"{sub_folder}/{f}"
-                if q and q not in rel_item.lower():
+                human = audio_vag.get_human_audio_name(f)
+                display_str = f"{rel_item} — {human}" if human else rel_item
+                if q and q not in display_str.lower():
                     continue
-                base_no_ext = os.path.splitext(f).__getitem__(0).lower()
+                base_no_ext = os.path.splitext(f)[0].lower()
                 has_custom = os.path.exists(os.path.join(ws, custom_sub, f))
                 has_pc = (sub_folder == "sounds" and base_no_ext in pack_sounds)
                 tag = "[CUSTOM] " if has_custom else ("[PACK AUDIO] " if has_pc else f"[{sub_folder.upper()}] ")
                 self.audio_files.append(rel_item)
-                self.lb_audio.insert("end", tag + rel_item)
+                self.lb_audio.insert("end", tag + display_str)
+
+    def play_vita_sound(self):
+        rel_name = self.get_selected_audio_rel()
+        if not rel_name:
+            return
+        ws = self.cfg["workspace_dir"]
+        sub_folder, fname = rel_name.split("/", 1)
+        custom_sub = "custom_sounds" if sub_folder == "sounds" else "custom_music"
+        custom_p = os.path.join(ws, custom_sub, fname)
+        src_audio = custom_p if os.path.exists(custom_p) else os.path.join(ws, "vanilla", sub_folder, fname)
+        tmp_wav = os.path.join(ws, "tmp_preview.wav")
+        try:
+            audio_vag.decode_with_vgmstream(src_audio, tmp_wav)
+            audio_vag.play_wav_async(tmp_wav, volume=self.var_volume.get())
+        except Exception as e:
+            messagebox.showinfo("vgmstream Required", str(e))
 
     def play_mod_sound(self):
-        rel_name = self.get_selected_vag()
+        rel_name = self.get_selected_audio_rel()
         if not rel_name or not rel_name.startswith("sounds/"):
             return
-        vag_name = rel_name.split("/", 1).__getitem__(1)
-
-        stem = os.path.splitext(vag_name).__getitem__(0).lower()
+        vag_name = rel_name.split("/", 1)[1]
+        stem = os.path.splitext(vag_name)[0].lower()
         pack_sounds = self.collect_pack_sounds_map()
         if stem not in pack_sounds:
             messagebox.showinfo("Not Found", f"No matching {stem}.wav or {stem}.xnb in PC Texture Pack.")
@@ -1087,22 +1155,80 @@ class OcramApp:
         else:
             audio_vag.play_wav_async(src_p, volume=self.var_volume.get())
 
-
-    def play_vita_sound(self):
-        rel_name = self.get_selected_vag()
+    def replace_custom_wav(self):
+        rel_name = self.get_selected_audio_rel()
         if not rel_name:
+            messagebox.showinfo("Select Track", "Please select a sound (.vag) or music track (.at9) from the list first.")
+            return
+
+        sub_folder, target_fname = rel_name.split("/", 1)
+        ws = self.cfg["workspace_dir"]
+
+        if sub_folder == "sounds":
+            src_p = filedialog.askopenfilename(
+                title=f"Replace {target_fname}",
+                filetypes=[("Audio Files", "*.wav *.xnb *.vag"), ("All files", "*.*")]
+            )
+            if not src_p:
+                return
+            orig_vag = os.path.join(ws, "vanilla", "sounds", target_fname)
+            orig_rate, orig_ch = audio_vag.get_vag_header_info(orig_vag)
+            out_vag = os.path.join(ws, "custom_sounds", target_fname)
+            if audio_vag.convert_any_sound_to_vag(src_p, out_vag, orig_rate, orig_ch, ws):
+                self.refresh_audio_list()
+                messagebox.showinfo("Replaced", f"Assigned '{os.path.basename(src_p)}' -> '{target_fname}'!\nClick 'Build VFS' to pack.")
+            else:
+                messagebox.showerror("Error", "Failed to convert selected audio file.")
+        else:
+            src_p = filedialog.askopenfilename(
+                title=f"Replace Music Track {target_fname}",
+                filetypes=[("Audio Files (.at9 / .wav / .xnb)", "*.at9 *.wav *.xnb"), ("All files", "*.*")]
+            )
+            if not src_p:
+                return
+            out_at9 = os.path.join(ws, "custom_music", target_fname)
+            os.makedirs(os.path.dirname(out_at9), exist_ok=True)
+            low_src = src_p.lower()
+            br_val = int(self.cb_at9_br.get().split().__getitem__(0))
+            try:
+                if low_src.endswith(".at9"):
+                    shutil.copy2(src_p, out_at9)
+                elif low_src.endswith(".wav"):
+                    audio_vag.encode_wav_to_at9(src_p, out_at9, bitrate=br_val)
+                elif low_src.endswith(".xnb"):
+                    tmp_wav = os.path.join(ws, "_tmp_xnb_music.wav")
+                    if not audio_vag.extract_xnb_sound_to_wav(src_p, tmp_wav):
+                        raise RuntimeError("Failed to extract PCM audio from .xnb file.")
+                    audio_vag.encode_wav_to_at9(tmp_wav, out_at9, bitrate=br_val)
+                else:
+                    messagebox.showwarning("Unsupported Format", "Please select a .at9, .wav, or .xnb audio file.")
+                    return
+                self.refresh_audio_list()
+                messagebox.showinfo("Replaced", f"Assigned '{os.path.basename(src_p)}' -> '{target_fname}' ({br_val} kbps)!\nClick 'Build VFS' to pack.")
+            except Exception as e:
+                messagebox.showerror("ATRAC9 Encoding Error", str(e))
+
+
+    def batch_replace_audio(self):
+        pack_sounds = self.collect_pack_sounds_map()
+        if not pack_sounds:
+            messagebox.showwarning("No Sounds", "No .wav or .xnb files found in PC Texture Pack Sounds folder.")
             return
         ws = self.cfg["workspace_dir"]
-        sub_folder, fname = rel_name.split("/", 1)
-        custom_sub = "custom_sounds" if sub_folder == "sounds" else "custom_music"
-        custom_p = os.path.join(ws, custom_sub, fname)
-        src_audio = custom_p if os.path.exists(custom_p) else os.path.join(ws, "vanilla", sub_folder, fname)
-        tmp_wav = os.path.join(ws, "tmp_preview.wav")
-        try:
-            audio_vag.decode_audio_any_to_wav(src_audio, tmp_wav)
-            audio_vag.play_wav_async(tmp_wav, volume=self.var_volume.get())
-        except Exception as e:
-            messagebox.showinfo("Audio Decoder", str(e))
+        snd_dir = os.path.join(ws, "vanilla", "sounds")
+        replaced = 0
+        for vag_name in sorted(os.listdir(snd_dir)):
+            if not vag_name.lower().endswith(".vag"):
+                continue
+            stem = os.path.splitext(vag_name)[0].lower()
+            if stem in pack_sounds:
+                orig_vag = os.path.join(snd_dir, vag_name)
+                orig_rate, orig_ch = audio_vag.get_vag_header_info(orig_vag)
+                out_vag = os.path.join(ws, "custom_sounds", vag_name)
+                if audio_vag.convert_any_sound_to_vag(pack_sounds[stem], out_vag, orig_rate, orig_ch, ws):
+                    replaced += 1
+        self.refresh_audio_list()
+        messagebox.showinfo("Batch Audio", f"Converted and replaced {replaced} sound effects!")
 
     # ================= TEXT EDITOR (.STR) METHODS =================
     def refresh_str_dropdown(self):
@@ -1188,6 +1314,3 @@ class OcramApp:
                     self.current_strings[idx] = str(v)
             self.filter_str_list()
             messagebox.showinfo("Imported", "Strings updated from JSON! Click 'Save .STR' to keep changes.")
-
-
-

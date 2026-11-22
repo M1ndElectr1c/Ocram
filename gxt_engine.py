@@ -412,7 +412,10 @@ def apply_texture_pack(tp_dir: str, vita_dir: str, unpacked_dir: str, out_dir: s
 
     # 2. 8-битный атлас NPC
     npc_items = edits["npc"]
-    npc_png_path = os.path.join(unpacked_dir, "_sheetNPC.png")
+    npc_png_path = os.path.join(unpacked_dir, "images", "_sheetNPC.png")
+    if not os.path.exists(npc_png_path):
+        npc_png_path = os.path.join(unpacked_dir, "_sheetNPC.png")
+
     if npc_items and os.path.exists(npc_png_path):
         npc_canvas = Image.open(npc_png_path).convert("RGBA")
         for fname, mod_path, info in npc_items:
